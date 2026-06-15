@@ -8,20 +8,26 @@ from sqlalchemy.pool import NullPool, QueuePool
 
 from app.config import settings
 
-# Render 环境变量（平台自动注入），或显式设置 USE_NULL_POOL=true
-# 配合 Supabase Transaction Pooler 使用 NullPool：SQLAlchemy 不维护自己的连接池，
-# 每次请求从 pgbouncer 借连接、用完立即归还，大幅降低内存占用。
+# Render 平台自动注入 RENDER=true；也可在 .env 手动设置 USE_NULL_POOL=true
 _use_null_pool = os.environ.get("RENDER") == "true" or os.environ.get("USE_NULL_POOL") == "true"
 
-engine = create_engine(
-    settings.database_url,
-    poolclass=NullPool if _use_null_pool else QueuePool,
-    # 本地开发保留小连接池；生产走 NullPool，以下参数无效但不影响
-    pool_size=2,
-    max_overflow=3,
-    pool_pre_ping=True,
-    echo=False,
-)
+if _use_null_pool:
+    # NullPool 不支持 pool_size / max_overflow 参数
+    engine = create_engine(
+        settings.database_url,
+        poolclass=NullPool,
+        pool_pre_ping=True,
+        echo=False,
+    )
+else:
+    engine = create_engine(
+        settings.database_url,
+        poolclass=QueuePool,
+        pool_size=2,
+        max_overflow=3,
+        pool_pre_ping=True,
+        echo=False,
+    )
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
