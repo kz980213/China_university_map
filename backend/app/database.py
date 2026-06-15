@@ -12,10 +12,13 @@ from app.config import settings
 _use_null_pool = os.environ.get("RENDER") == "true" or os.environ.get("USE_NULL_POOL") == "true"
 
 if _use_null_pool:
-    # NullPool 不支持 pool_size / max_overflow 参数
+    # NullPool + Supabase Transaction Pooler（pgbouncer）
+    # prepare_threshold=None：禁用 psycopg3 的 prepared statement，
+    # pgbouncer transaction 模式不支持 PREPARE 命令。
     engine = create_engine(
         settings.database_url,
         poolclass=NullPool,
+        connect_args={"prepare_threshold": None},
         pool_pre_ping=True,
         echo=False,
     )
