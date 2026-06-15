@@ -1,0 +1,65 @@
+@use './variables' as *;
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html, body {
+  height: 100%;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  font-size: 14px;
+  color: $text-primary;
+  background-color: $bg-main;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+#app {
+  height: 100%;
+}
+
+a {
+  color: $color-primary-light;
+  text-decoration: none;
+  &:hover {
+    color: $color-primary;
+  }
+}
+
+ul, li {
+  list-style: none;
+}
+
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-thumb {
+  background-color: rgba(0, 0, 0, 0.15);
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-track {
+  background-color: transparent;
+}
+
+// Element Plus 全局覆盖
+.el-button--primary {
+  --el-button-bg-color: #{$color-primary};
+  --el-button-border-color: #{$color-primary};
+  --el-button-hover-bg-color: #{$color-primary-light};
+  --el-button-hover-border-color: #{$color-primary-light};
+}
+
+.el-checkbox__input.is-checked .el-checkbox__inner {
+  background-color: $color-primary;
+  border-color: $color-primary;
+}
+
+.el-checkbox__input.is-indeterminate .el-checkbox__inner {
+  background-color: $color-primary;
+  border-color: $color-primary;
+}

@@ -1,0 +1,24 @@
+全国高校地图查询系统 — Alembic 数据库迁移
+
+用法（在 backend/ 目录下执行）：
+
+  # 升级到最新版本
+  alembic upgrade head
+
+  # 回滚一步
+  alembic downgrade -1
+
+  # 查看当前版本
+  alembic current
+
+  # 查看迁移历史
+  alembic history --verbose
+
+  # 根据当前模型自动生成新迁移（需要数据库连接）
+  alembic revision --autogenerate -m "描述"
+
+迁移顺序：
+  0001 → initial_schema       schools / majors / school_majors / admission_scores
+  0002 → add_province_dim     provinces 维度表
+  0003 → add_score_rank       score_rank_tables 一分一段表         (Step 2)
+  0004 → calibrate_admission  admission_scores 表结构校准          (Step 3)
