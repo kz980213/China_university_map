@@ -1,4 +1,5 @@
-const BASE = "/api"
+// 开发时走 Vite proxy（空字符串 → 同源 /api）；生产时设置 VITE_API_BASE_URL=https://your-render-app.onrender.com
+const BASE = (import.meta.env.VITE_API_BASE_URL ?? "") + "/api"
 
 function snakify(obj: Record<string, unknown>): Record<string, unknown> {
   const out: Record<string, unknown> = {}

@@ -1,26 +1,21 @@
-"""FastAPI 应用入口。
-
-第一阶段仅提供基础骨架和 /api/health 接口。
-"""
+"""FastAPI 应用入口。"""
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.config import settings
 from app.routers import health, schools, filters, majors, stats, admission, volunteer
 
 app = FastAPI(
     title="全国高校地图查询系统 API",
-    version="0.1.0",
-    description="第一阶段 MVP：后端基础骨架",
+    version="1.0.0",
 )
 
-# 配置 CORS，允许本地前端访问
+_cors_origins = [o.strip() for o in settings.backend_cors_origins.split(",") if o.strip()]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:5173",
-        "http://127.0.0.1:5173",
-    ],
+    allow_origins=_cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

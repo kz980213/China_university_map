@@ -1,0 +1,12 @@
+services:
+  - type: web
+    name: china-university-map-api
+    runtime: python
+    rootDir: backend
+    buildCommand: pip install -r requirements.txt && alembic upgrade head
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: DATABASE_URL
+        sync: false          # 在 Render Dashboard 手动填写 Supabase 连接串
+      - key: BACKEND_CORS_ORIGINS
+        sync: false          # 填写 Vercel 前端域名，如 https://your-app.vercel.app
