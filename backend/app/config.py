@@ -16,6 +16,10 @@ class Settings(BaseSettings):
 
     amap_api_key: str | None = None
 
+    anthropic_api_key: str | None = None
+
+    deepseek_api_key: str | None = None
+
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"

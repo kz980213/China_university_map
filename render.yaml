@@ -11,4 +11,8 @@ services:
         sync: false
       - key: BACKEND_CORS_ORIGINS
         sync: false
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: DEEPSEEK_API_KEY
+        sync: false
       # Render 平台自动注入 RENDER=true，database.py 据此启用 NullPool

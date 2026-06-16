@@ -5,6 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import settings
 from app.routers import health, schools, filters, majors, stats, admission, volunteer
+from app.routers import ai_chat
 
 app = FastAPI(
     title="全国高校地图查询系统 API",
@@ -29,3 +30,4 @@ app.include_router(majors.router)
 app.include_router(stats.router)
 app.include_router(admission.router)
 app.include_router(volunteer.router)
+app.include_router(ai_chat.router)
