@@ -3,11 +3,11 @@ import type { School } from '@/types/school'
 import type { AdmissionScore } from '@/types/admission'
 import type { SchoolMajor } from '@/types/major'
 import { useApiMode } from './useApiMode'
-import { fetchSchools, fetchSchoolDetail, fetchAdmissionScores, fetchProvinceStats, fetchSchoolMajors } from '@/api'
+import { fetchSchools, fetchSchoolDetail, fetchAdmissionScores, fetchSchoolMajors } from '@/api'
 import { mockSchools } from '@/mock/schools'
 import { mockAdmissionScores } from '@/mock/admissionScores'
 import { mockSchoolMajors } from '@/mock/schoolMajors'
-import { mockProvinceStats } from '@/mock/provinceStats'
+import { PROVINCE_STATS } from '@/constants/provinceStats'
 
 export function useSchoolData() {
   const { isApiMode } = useApiMode()
@@ -123,23 +123,12 @@ export function useSchoolData() {
     }
   }
 
-  // ── 省份统计 ──
-  const provinceStats = ref<Array<{ province: string; total: number; undergraduateCount: number; juniorCollegeCount: number; count985: number; count211: number; doubleFirstClassCount: number }>>([])
+  // ── 省份统计（前端常量，不走接口）──
+  const provinceStats = ref(PROVINCE_STATS)
   const statsLoading = ref(false)
 
-  async function loadProvinceStats() {
-    statsLoading.value = true
-    try {
-      if (isApiMode.value) {
-        provinceStats.value = await fetchProvinceStats()
-      } else {
-        provinceStats.value = mockProvinceStats
-      }
-    } catch {
-      provinceStats.value = mockProvinceStats
-    } finally {
-      statsLoading.value = false
-    }
+  function loadProvinceStats() {
+    // 数据已内置为常量，无需异步请求
   }
 
   // ── 学校专业 ──

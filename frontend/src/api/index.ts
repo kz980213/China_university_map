@@ -9,7 +9,7 @@ const BASE = (import.meta.env.VITE_API_BASE_URL ?? "") + "/api"
 const _cache = new Map<string, unknown>()
 const _inflight = new Map<string, Promise<unknown>>()
 
-const CACHE_PREFIXES = ["/filters/", "/stats/provinces"]
+const CACHE_PREFIXES = ["/filters/"]
 
 function isCacheable(url: string): boolean {
   return CACHE_PREFIXES.some((p) => url.startsWith(p))
@@ -122,11 +122,6 @@ export async function fetchSchoolDetail(id: number) {
 
 export async function fetchAdmissionScores(id: number, params: Record<string, unknown> = {}) {
   return request<any[]>(`/schools/${id}/admission`, params)
-}
-
-// ── 统计 ──
-export async function fetchProvinceStats() {
-  return request<any[]>("/stats/provinces")
 }
 
 // ── 筛选器（均命中缓存） ──
