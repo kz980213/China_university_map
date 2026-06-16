@@ -4,8 +4,6 @@ import AMapLoader from '@amap/amap-jsapi-loader'
 import type { School } from '@/types/school'
 import { normalizeProvinceName, toMapProvinceName } from '@/utils/province'
 import { fetchProvinceCities, fetchMapSchools } from '@/api'
-import MapLegend from './MapLegend.vue'
-
 export interface ProvinceStatItem {
   province: string
   total: number
@@ -14,6 +12,16 @@ export interface ProvinceStatItem {
   count985: number
   count211: number
   doubleFirstClassCount: number
+}
+
+interface CityStatItem {
+  city: string
+  count: number
+  count985: number
+  count211: number
+  doubleFirstClass: number
+  undergraduate: number
+  juniorCollege: number
 }
 
 const props = defineProps<{
@@ -93,6 +101,10 @@ let cityMarkers: any[] = []      // School markers + city boundary highlight
 // Province center cache populated during country view load
 const provinceCenterCache = new Map<string, [number, number]>()
 
+// City count-label tracker: city name → AMap.Text object (so we can remove on click)
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const cityLabelMap = new Map<string, any>()
+
 // Guard against concurrent country polygon builds
 let _countryBuildPromise: Promise<void> | null = null
 
@@ -123,24 +135,68 @@ function badgeColor(school: { is985: boolean; is211: boolean; isDoubleFirstClass
   return '#9ca3af'
 }
 
-// ─── Hover tooltip ────────────────────────────────────────────────────────────
+// ─── Tooltip helpers ──────────────────────────────────────────────────────────
 const TOOLTIP_STYLE = [
-  'background:white', 'border-radius:8px', 'padding:8px 12px',
+  'background:white', 'border-radius:8px', 'padding:10px 14px',
   'box-shadow:0 4px 12px rgba(0,0,0,0.15)', 'font-size:13px',
   'white-space:nowrap', 'pointer-events:none', 'line-height:1.6',
 ].join(';')
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-function showTooltip(html: string, lnglat: any) {
+const TD_LABEL = 'style="color:#6b7280;padding:1px 12px 1px 0"'
+const TD_VAL   = 'style="font-weight:600;text-align:right"'
+
+function buildProvinceTooltip(name: string, stat?: ProvinceStatItem): string {
+  return `<div style="${TOOLTIP_STYLE}">
+    <div style="font-weight:700;font-size:14px;color:#111827;margin-bottom:6px">${name}</div>
+    <table style="border-collapse:collapse">
+      <tr><td ${TD_LABEL}>院校总数</td><td ${TD_VAL} style="color:#1f2937">${stat?.total ?? 0}</td></tr>
+      <tr><td ${TD_LABEL}>985</td><td ${TD_VAL} style="color:#dc2626">${stat?.count985 ?? 0}</td></tr>
+      <tr><td ${TD_LABEL}>211</td><td ${TD_VAL} style="color:#2563eb">${stat?.count211 ?? 0}</td></tr>
+      <tr><td ${TD_LABEL}>双一流</td><td ${TD_VAL} style="color:#7c3aed">${stat?.doubleFirstClassCount ?? 0}</td></tr>
+      <tr><td ${TD_LABEL}>本科</td><td ${TD_VAL} style="color:#059669">${stat?.undergraduateCount ?? 0}</td></tr>
+      <tr><td ${TD_LABEL}>专科</td><td ${TD_VAL} style="color:#d97706">${stat?.juniorCollegeCount ?? 0}</td></tr>
+    </table>
+  </div>`
+}
+
+function buildCityTooltip(stat: CityStatItem): string {
+  return `<div style="${TOOLTIP_STYLE}">
+    <div style="font-weight:700;font-size:14px;color:#111827;margin-bottom:6px">${stat.city}</div>
+    <table style="border-collapse:collapse">
+      <tr><td ${TD_LABEL}>院校总数</td><td ${TD_VAL} style="color:#1f2937">${stat.count}</td></tr>
+      <tr><td ${TD_LABEL}>985</td><td ${TD_VAL} style="color:#dc2626">${stat.count985}</td></tr>
+      <tr><td ${TD_LABEL}>211</td><td ${TD_VAL} style="color:#2563eb">${stat.count211}</td></tr>
+      <tr><td ${TD_LABEL}>双一流</td><td ${TD_VAL} style="color:#7c3aed">${stat.doubleFirstClass}</td></tr>
+      <tr><td ${TD_LABEL}>本科</td><td ${TD_VAL} style="color:#059669">${stat.undergraduate}</td></tr>
+      <tr><td ${TD_LABEL}>专科</td><td ${TD_VAL} style="color:#d97706">${stat.juniorCollege}</td></tr>
+    </table>
+  </div>`
+}
+
+// Tooltip anchored to a fixed geographic center — does NOT follow the mouse
+function showTooltipAt(html: string, center: [number, number]) {
   if (!infoWindow) {
     infoWindow = new AMap.InfoWindow({ isCustom: true, autoMove: false, closeWhenClickMap: false })
   }
   infoWindow.setContent(html)
-  infoWindow.open(map, lnglat)
+  infoWindow.open(map, center)
 }
 
-function hideTooltip() {
-  infoWindow?.close()
+function hideTooltip() { infoWindow?.close() }
+
+// ─── Overlay opacity helpers (city view dims the background) ─────────────────
+function dimForCityView() {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  for (const p of countryPolygons)  (p as any).setOptions?.({ fillOpacity: 0.05 })
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  for (const p of provincePolygons) (p as any).setOptions?.({ fillOpacity: 0.05 })
+}
+
+function restorePolygonOpacity() {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  for (const p of countryPolygons)  (p as any).setOptions?.({ fillOpacity: 0.85 })
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  for (const p of provincePolygons) (p as any).setOptions?.({ fillOpacity: 0.85 })
 }
 
 // ─── Map init ─────────────────────────────────────────────────────────────────
@@ -208,14 +264,9 @@ async function _buildAndAddCountryPolygons(): Promise<void> {
         zIndex: 10,
       })
       polygon.on('click', () => selectProvince(name))
-      polygon.on('mouseover', (e: { lnglat: unknown }) => {
-        showTooltip(
-          `<div style="${TOOLTIP_STYLE}">
-            <span style="font-weight:600;color:#1f2937">${shortName}</span>
-            <br><span style="color:#6b7280">${total} 所高校</span>
-          </div>`,
-          e.lnglat,
-        )
+      const stat = statsByShort.get(shortName)
+      polygon.on('mouseover', () => {
+        if (center) showTooltipAt(buildProvinceTooltip(shortName, stat), center as [number, number])
       })
       polygon.on('mouseout', hideTooltip)
       countryPolygons.push(polygon)
@@ -234,6 +285,7 @@ async function ensureCountryBase(): Promise<void> {
 
 // ─── View loaders ─────────────────────────────────────────────────────────────
 async function loadCountryView() {
+  restorePolygonOpacity()
   hideTooltip()
   if (map && provincePolygons.length) { map.remove(provincePolygons); provincePolygons = [] }
   if (map && cityMarkers.length) { map.remove(cityMarkers); cityMarkers = [] }
@@ -266,6 +318,7 @@ async function loadProvinceView(provinceFull: string) {
   hideTooltip()
   if (map && provincePolygons.length) { map.remove(provincePolygons); provincePolygons = [] }
   if (map && cityMarkers.length) { map.remove(cityMarkers); cityMarkers = [] }
+  cityLabelMap.clear()
   viewLevel.value = 'province'
   currentProvinceFull.value = provinceFull
   currentCity.value = ''
@@ -287,7 +340,7 @@ async function loadProvinceView(provinceFull: string) {
       return
     }
 
-    const countByCity = new Map(cities.map((c) => [c.city, c.count]))
+    const statByCity = new Map(cities.map((c) => [c.city, c]))
     const totals = cities.map((c) => c.count)
     const min = totals.length ? Math.min(...totals) : 0
     const max = totals.length ? Math.max(...totals) : 1
@@ -298,13 +351,13 @@ async function loadProvinceView(provinceFull: string) {
     const geo = await fetchGeo(adcode)
     const newPolygons: unknown[] = []
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const fitTargets: any[] = [] // Polygons only, for setFitView
+    const fitTargets: any[] = []
 
     for (const feature of geo.features ?? []) {
       const name: string = feature.properties?.name ?? ''
-      const center = feature.properties?.center
-      const count = countByCity.get(name) ?? 0
-      const fill = colorForValue(count, min, max)
+      const center: [number, number] | undefined = feature.properties?.center
+      const stat = statByCity.get(name) ?? { city: name, count: 0, count985: 0, count211: 0, doubleFirstClass: 0, undergraduate: 0, juniorCollege: 0 }
+      const fill = colorForValue(stat.count, min, max)
 
       for (const path of geoPaths(feature.geometry)) {
         const polygon = new AMap.Polygon({
@@ -317,20 +370,19 @@ async function loadProvinceView(provinceFull: string) {
           zIndex: 20,
         })
         polygon.on('click', () => selectCity(name, feature))
-        polygon.on('mouseover', (e: { lnglat: unknown }) => {
-          showTooltip(
-            `<div style="${TOOLTIP_STYLE}">
-              <span style="font-weight:600;color:#1f2937">${name}</span>
-              <br><span style="color:#6b7280">${count} 所高校</span>
-            </div>`,
-            e.lnglat,
-          )
+        polygon.on('mouseover', () => {
+          if (center) showTooltipAt(buildCityTooltip(stat), center)
         })
         polygon.on('mouseout', hideTooltip)
         newPolygons.push(polygon)
         fitTargets.push(polygon)
       }
-      if (center) newPolygons.push(makeDistrictLabel(String(count), center))
+
+      if (center && stat.count > 0) {
+        const label = makeDistrictLabel(String(stat.count), center)
+        newPolygons.push(label)
+        cityLabelMap.set(name, label)
+      }
     }
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -338,7 +390,6 @@ async function loadProvinceView(provinceFull: string) {
     loading.value = false
     map.add(provincePolygons)
 
-    // Fit to province polygons with generous padding so neighboring provinces remain visible
     if (fitTargets.length) {
       map.setFitView(fitTargets, true, [100, 100, 100, 100])
     }
@@ -361,6 +412,9 @@ async function loadCityView(city: string, cityFeature?: any) {
     const ok = await ensureMap()
     if (!ok) { loading.value = false; return }
 
+    // Dim province/city polygon fills so base map tiles show through
+    dimForCityView()
+
     const list = await fetchMapSchools({ city })
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const newMarkers: any[] = []
@@ -373,12 +427,12 @@ async function loadCityView(city: string, cityFeature?: any) {
         const boundary = new AMap.Polygon({
           path,
           fillColor: '#dbeafe',
-          fillOpacity: 0.4,
+          fillOpacity: 0.25,
           strokeColor: '#2563eb',
-          strokeWeight: 2.5,
+          strokeWeight: 2,
           cursor: 'default',
           zIndex: 25,
-          bubble: true, // let clicks pass through to underlying province polygons
+          bubble: true,
         })
         newMarkers.push(boundary)
         fitTargets.push(boundary)
@@ -386,10 +440,11 @@ async function loadCityView(city: string, cityFeature?: any) {
     }
 
     for (const item of list) {
+      const color = badgeColor(item)
       const marker = new AMap.Marker({
         position: [item.lng, item.lat],
         title: item.name,
-        content: `<div style="width:12px;height:12px;border-radius:50%;border:2px solid #fff;box-shadow:0 0 0 1px rgba(0,0,0,0.15);background:${badgeColor(item)}"></div>`,
+        content: `<div style="width:12px;height:12px;border-radius:50%;border:2px solid #fff;box-shadow:0 0 0 1px rgba(0,0,0,0.15);background:${color}"></div>`,
         offset: new AMap.Pixel(-7, -7),
         zIndex: 30,
       })
@@ -399,13 +454,34 @@ async function loadCityView(city: string, cityFeature?: any) {
       })
       newMarkers.push(marker)
       fitTargets.push(marker)
+
+      // School name label above the dot
+      const nameLabel = new AMap.Text({
+        text: item.name,
+        position: [item.lng, item.lat],
+        offset: new AMap.Pixel(0, -20),
+        style: {
+          'font-size': '11px',
+          'font-weight': '500',
+          color: '#1f2937',
+          padding: '1px 4px',
+          background: 'rgba(255,255,255,0.88)',
+          border: 'none',
+          'box-shadow': 'none',
+          'border-radius': '2px',
+          'white-space': 'nowrap',
+          'pointer-events': 'none',
+        },
+        anchor: 'bottom-center',
+        zIndex: 35,
+      })
+      newMarkers.push(nameLabel)
     }
 
     cityMarkers = newMarkers
     loading.value = false
     map.add(cityMarkers)
 
-    // Center on city — fit to boundary + markers, then zoom out slightly for context
     if (fitTargets.length) {
       map.setFitView(fitTargets, true, [80, 80, 80, 80])
     }
@@ -423,6 +499,14 @@ function selectProvince(provinceFull: string) {
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function selectCity(city: string, feature?: any) {
+  // Remove the count label for the clicked city
+  const label = cityLabelMap.get(city)
+  if (label && map) {
+    map.remove(label)
+    const idx = provincePolygons.indexOf(label)
+    if (idx !== -1) provincePolygons.splice(idx, 1)
+    cityLabelMap.delete(city)
+  }
   loadCityView(city, feature)
 }
 
@@ -432,6 +516,7 @@ function backToCountry() {
 }
 
 function backToProvince() {
+  restorePolygonOpacity()
   if (!currentProvinceFull.value) return
   hideTooltip()
   if (map && cityMarkers.length) { map.remove(cityMarkers); cityMarkers = [] }
@@ -528,8 +613,6 @@ const breadcrumb = computed(() => {
 
     <div v-if="loading" class="map-overlay-tip">加载中…</div>
     <div v-else-if="loadError" class="map-overlay-tip error">{{ loadError }}</div>
-
-    <MapLegend v-if="viewLevel === 'city'" />
   </div>
 </template>
 

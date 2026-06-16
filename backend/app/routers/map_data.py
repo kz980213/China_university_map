@@ -6,7 +6,7 @@ from functools import lru_cache
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Query
 from fastapi.responses import Response
-from sqlalchemy import func
+from sqlalchemy import case, func
 from sqlalchemy.orm import Session
 
 from app.database import get_db
@@ -42,15 +42,34 @@ async def proxy_datav_geo(adcode: int = Path(..., ge=100000, le=999999)):
 
 @router.get("/cities")
 def get_province_cities(province: str, db: Session = Depends(get_db)):
-    """返回指定省份各市的高校数量。province 传完整名称（如"江苏省"）。"""
+    """返回指定省份各市的高校数量及院校类型分布。"""
     rows = (
-        db.query(School.city, func.count(School.id).label("count"))
+        db.query(
+            School.city,
+            func.count(School.id).label("count"),
+            func.sum(case((School.is_985.is_(True), 1), else_=0)).label("count985"),
+            func.sum(case((School.is_211.is_(True), 1), else_=0)).label("count211"),
+            func.sum(case((School.is_double_first_class.is_(True), 1), else_=0)).label("double_first_class"),
+            func.sum(case((School.level == "本科", 1), else_=0)).label("undergraduate"),
+            func.sum(case((School.level != "本科", 1), else_=0)).label("junior_college"),
+        )
         .filter(School.province == province)
         .group_by(School.city)
         .order_by(func.count(School.id).desc())
         .all()
     )
-    return [{"city": r.city, "count": r.count} for r in rows]
+    return [
+        {
+            "city": r.city,
+            "count": r.count,
+            "count985": int(r.count985 or 0),
+            "count211": int(r.count211 or 0),
+            "double_first_class": int(r.double_first_class or 0),
+            "undergraduate": int(r.undergraduate or 0),
+            "junior_college": int(r.junior_college or 0),
+        }
+        for r in rows
+    ]
 
 
 @router.get("/schools")

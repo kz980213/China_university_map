@@ -177,7 +177,15 @@ export async function fetchSchoolMajors(schoolId: number) {
 
 // ── 地图下钻 ──
 export async function fetchProvinceCities(province: string) {
-  return request<{ city: string; count: number }[]>("/map/cities", { province })
+  return request<{
+    city: string
+    count: number
+    count985: number
+    count211: number
+    doubleFirstClass: number
+    undergraduate: number
+    juniorCollege: number
+  }[]>("/map/cities", { province })
 }
 
 export async function fetchMapSchools(params: { province?: string; city?: string }) {
