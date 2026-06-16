@@ -31,7 +31,7 @@ type ViewLevel = 'country' | 'province' | 'city'
 
 const KEY = import.meta.env.VITE_AMAP_KEY as string | undefined
 const COLOR_STOPS = ['#eff6ff', '#bfdbfe', '#3b82f6', '#1e40af']
-const GEO_BASE = '/api/map/geo'
+const GEO_BASE = (import.meta.env.VITE_API_BASE_URL ?? '') + '/api/map/geo'
 
 const PROVINCE_ADCODE: Record<string, number> = {
   '北京市': 110000, '天津市': 120000, '河北省': 130000, '山西省': 140000,
