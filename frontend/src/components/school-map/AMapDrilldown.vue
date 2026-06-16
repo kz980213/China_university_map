@@ -31,7 +31,6 @@ type ViewLevel = 'country' | 'province' | 'city'
 
 const KEY = import.meta.env.VITE_AMAP_KEY as string | undefined
 const COLOR_STOPS = ['#eff6ff', '#bfdbfe', '#3b82f6', '#1e40af']
-
 const DATAV_BASE = 'https://geo.datav.aliyun.com/areas_v3/bound'
 
 const PROVINCE_ADCODE: Record<string, number> = {
@@ -65,6 +64,7 @@ function geoPaths(geometry: any): number[][][] {
   return []
 }
 
+// ─── Reactive state ───────────────────────────────────────────────────────────
 const mapContainer = ref<HTMLDivElement | null>(null)
 const viewLevel = ref<ViewLevel>('country')
 const currentProvinceFull = ref('')
@@ -72,15 +72,31 @@ const currentCity = ref('')
 const loading = ref(false)
 const loadError = ref('')
 
+// ─── AMap instances ───────────────────────────────────────────────────────────
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 let AMap: any = null
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 let map: any = null
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-let overlays: any[] = []
+let infoWindow: any = null
 let resizeObserver: ResizeObserver | null = null
 let mapInitStarted = false
 
+// ─── Overlay layers (kept separate for targeted cleanup) ─────────────────────
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let countryPolygons: any[] = []  // Province outlines — base, kept across views
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let provincePolygons: any[] = [] // City outlines + labels for selected province
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let cityMarkers: any[] = []      // School markers + city boundary highlight
+
+// Province center cache populated during country view load
+const provinceCenterCache = new Map<string, [number, number]>()
+
+// Guard against concurrent country polygon builds
+let _countryBuildPromise: Promise<void> | null = null
+
+// ─── Color helpers ────────────────────────────────────────────────────────────
 function lerpColor(c0: string, c1: string, t: number): string {
   const a = parseInt(c0.slice(1), 16)
   const b = parseInt(c1.slice(1), 16)
@@ -107,30 +123,38 @@ function badgeColor(school: { is985: boolean; is211: boolean; isDoubleFirstClass
   return '#9ca3af'
 }
 
-function clearOverlays() {
-  if (map && overlays.length) map.remove(overlays)
-  overlays = []
+// ─── Hover tooltip ────────────────────────────────────────────────────────────
+const TOOLTIP_STYLE = [
+  'background:white', 'border-radius:8px', 'padding:8px 12px',
+  'box-shadow:0 4px 12px rgba(0,0,0,0.15)', 'font-size:13px',
+  'white-space:nowrap', 'pointer-events:none', 'line-height:1.6',
+].join(';')
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function showTooltip(html: string, lnglat: any) {
+  if (!infoWindow) {
+    infoWindow = new AMap.InfoWindow({ isCustom: true, autoMove: false, closeWhenClickMap: false })
+  }
+  infoWindow.setContent(html)
+  infoWindow.open(map, lnglat)
 }
 
+function hideTooltip() {
+  infoWindow?.close()
+}
+
+// ─── Map init ─────────────────────────────────────────────────────────────────
 async function ensureMap(): Promise<boolean> {
   if (map) return true
-  if (!KEY) {
-    loadError.value = '未配置高德地图 Key（VITE_AMAP_KEY）'
-    return false
-  }
+  if (!KEY) { loadError.value = '未配置高德地图 Key（VITE_AMAP_KEY）'; return false }
   if (!mapContainer.value) return false
-
-  const loaded = await AMapLoader.load({
-    key: KEY,
-    version: '2.0',
-    plugins: [],
-  })
+  const loaded = await AMapLoader.load({ key: KEY, version: '2.0', plugins: [] })
   AMap = loaded
   map = new AMap.Map(mapContainer.value, {
     viewMode: '2D',
     zoom: 4,
     center: [104.5, 36],
-    zooms: [3, 6],
+    zooms: [3, 18],
     resizeEnable: true,
   })
   return true
@@ -151,56 +175,87 @@ function makeDistrictLabel(text: string, position: unknown) {
       'white-space': 'nowrap',
     },
     anchor: 'center',
+    zIndex: 25,
   })
 }
 
+// ─── Country polygons (base layer, built once) ────────────────────────────────
+async function _buildAndAddCountryPolygons(): Promise<void> {
+  const statsByShort = new Map((props.provinceStats ?? []).map((s) => [s.province, s]))
+  const totals = (props.provinceStats ?? []).map((s) => s.total)
+  const min = totals.length ? Math.min(...totals) : 0
+  const max = totals.length ? Math.max(...totals) : 1
+
+  const geo = await fetchGeo(100000)
+
+  for (const feature of geo.features ?? []) {
+    const name: string = feature.properties?.name ?? ''
+    const center = feature.properties?.center
+    const shortName = normalizeProvinceName(name)
+    const total = statsByShort.get(shortName)?.total ?? 0
+    const fill = colorForValue(total, min, max)
+
+    if (center) provinceCenterCache.set(name, center as [number, number])
+
+    for (const path of geoPaths(feature.geometry)) {
+      const polygon = new AMap.Polygon({
+        path,
+        fillColor: fill,
+        fillOpacity: 0.85,
+        strokeColor: '#ffffff',
+        strokeWeight: 1,
+        cursor: 'pointer',
+        zIndex: 10,
+      })
+      polygon.on('click', () => selectProvince(name))
+      polygon.on('mouseover', (e: { lnglat: unknown }) => {
+        showTooltip(
+          `<div style="${TOOLTIP_STYLE}">
+            <span style="font-weight:600;color:#1f2937">${shortName}</span>
+            <br><span style="color:#6b7280">${total} 所高校</span>
+          </div>`,
+          e.lnglat,
+        )
+      })
+      polygon.on('mouseout', hideTooltip)
+      countryPolygons.push(polygon)
+    }
+  }
+
+  map.add(countryPolygons)
+}
+
+async function ensureCountryBase(): Promise<void> {
+  if (countryPolygons.length > 0) return
+  if (_countryBuildPromise) { await _countryBuildPromise; return }
+  _countryBuildPromise = _buildAndAddCountryPolygons().finally(() => { _countryBuildPromise = null })
+  await _countryBuildPromise
+}
+
+// ─── View loaders ─────────────────────────────────────────────────────────────
 async function loadCountryView() {
-  loading.value = true
-  loadError.value = ''
-  clearOverlays()
+  hideTooltip()
+  if (map && provincePolygons.length) { map.remove(provincePolygons); provincePolygons = [] }
+  if (map && cityMarkers.length) { map.remove(cityMarkers); cityMarkers = [] }
   viewLevel.value = 'country'
   currentProvinceFull.value = ''
   currentCity.value = ''
 
   try {
     const ok = await ensureMap()
-    if (!ok) { loading.value = false; return }
-    map.setZooms([3, 6])
+    if (!ok) return
 
-    const statsByShort = new Map((props.provinceStats ?? []).map((s) => [s.province, s]))
-    const totals = (props.provinceStats ?? []).map((s) => s.total)
-    const min = totals.length ? Math.min(...totals) : 0
-    const max = totals.length ? Math.max(...totals) : 1
-
-    const geo = await fetchGeo(100000)
-    const newOverlays: any[] = []
-
-    for (const feature of geo.features ?? []) {
-      const name: string = feature.properties?.name ?? ''
-      const center = feature.properties?.center
-      const shortName = normalizeProvinceName(name)
-      const total = statsByShort.get(shortName)?.total ?? 0
-      const fill = colorForValue(total, min, max)
-
-      for (const path of geoPaths(feature.geometry)) {
-        const polygon = new AMap.Polygon({
-          path,
-          fillColor: fill,
-          fillOpacity: 0.85,
-          strokeColor: '#ffffff',
-          strokeWeight: 1,
-          cursor: 'pointer',
-        })
-        polygon.on('click', () => selectProvince(name))
-        newOverlays.push(polygon)
-      }
-      if (center) newOverlays.push(makeDistrictLabel(String(total), center))
+    if (countryPolygons.length) {
+      // Already built — just animate back to full-China view
+      map.setFitView(countryPolygons, true, [20, 20, 20, 20])
+      return
     }
 
-    overlays = newOverlays
+    loading.value = true
+    loadError.value = ''
+    await ensureCountryBase()
     loading.value = false
-    map.add(overlays)
-    if (overlays.length) map.setFitView(overlays, false, [20, 20, 20, 20])
+    map.setFitView(countryPolygons, false, [20, 20, 20, 20])
   } catch (err) {
     loading.value = false
     loadError.value = err instanceof Error ? err.message : '地图加载失败'
@@ -208,29 +263,30 @@ async function loadCountryView() {
 }
 
 async function loadProvinceView(provinceFull: string) {
-  loading.value = true
-  loadError.value = ''
-  clearOverlays()
+  hideTooltip()
+  if (map && provincePolygons.length) { map.remove(provincePolygons); provincePolygons = [] }
+  if (map && cityMarkers.length) { map.remove(cityMarkers); cityMarkers = [] }
   viewLevel.value = 'province'
   currentProvinceFull.value = provinceFull
   currentCity.value = ''
+  loading.value = true
+  loadError.value = ''
 
   try {
     const ok = await ensureMap()
-    if (!ok) {
-      loading.value = false
-      return
-    }
+    if (!ok) { loading.value = false; return }
+
+    // Always ensure country base is visible underneath
+    await ensureCountryBase()
 
     const cities = await fetchProvinceCities(provinceFull)
 
-    // 直辖市等省市同名的情况：只有一个城市桶，直接进入学校点位视图
+    // Municipality shortcut: 北京/上海/天津/重庆 skip city-polygon step
     if (cities.length === 1 && cities[0].city === provinceFull) {
       await loadCityView(cities[0].city)
       return
     }
 
-    map.setZooms([5, 9])
     const countByCity = new Map(cities.map((c) => [c.city, c.count]))
     const totals = cities.map((c) => c.count)
     const min = totals.length ? Math.min(...totals) : 0
@@ -240,7 +296,9 @@ async function loadProvinceView(provinceFull: string) {
     if (!adcode) throw new Error(`未找到省份编码: ${provinceFull}`)
 
     const geo = await fetchGeo(adcode)
-    const newOverlays: any[] = []
+    const newPolygons: unknown[] = []
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const fitTargets: any[] = [] // Polygons only, for setFitView
 
     for (const feature of geo.features ?? []) {
       const name: string = feature.properties?.name ?? ''
@@ -254,42 +312,78 @@ async function loadProvinceView(provinceFull: string) {
           fillColor: fill,
           fillOpacity: 0.85,
           strokeColor: '#ffffff',
-          strokeWeight: 1,
+          strokeWeight: 1.5,
           cursor: 'pointer',
+          zIndex: 20,
         })
-        polygon.on('click', () => selectCity(name))
-        newOverlays.push(polygon)
+        polygon.on('click', () => selectCity(name, feature))
+        polygon.on('mouseover', (e: { lnglat: unknown }) => {
+          showTooltip(
+            `<div style="${TOOLTIP_STYLE}">
+              <span style="font-weight:600;color:#1f2937">${name}</span>
+              <br><span style="color:#6b7280">${count} 所高校</span>
+            </div>`,
+            e.lnglat,
+          )
+        })
+        polygon.on('mouseout', hideTooltip)
+        newPolygons.push(polygon)
+        fitTargets.push(polygon)
       }
-      if (center) newOverlays.push(makeDistrictLabel(String(count), center))
+      if (center) newPolygons.push(makeDistrictLabel(String(count), center))
     }
 
-    overlays = newOverlays
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    provincePolygons = newPolygons as any[]
     loading.value = false
-    map.add(overlays)
-    if (overlays.length) map.setFitView(overlays, false, [20, 20, 20, 20])
+    map.add(provincePolygons)
+
+    // Fit to province polygons with generous padding so neighboring provinces remain visible
+    if (fitTargets.length) {
+      map.setFitView(fitTargets, true, [100, 100, 100, 100])
+    }
   } catch (err) {
     loading.value = false
     loadError.value = err instanceof Error ? err.message : '城市数据加载失败'
   }
 }
 
-async function loadCityView(city: string) {
-  loading.value = true
-  loadError.value = ''
-  clearOverlays()
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function loadCityView(city: string, cityFeature?: any) {
+  hideTooltip()
+  if (map && cityMarkers.length) { map.remove(cityMarkers); cityMarkers = [] }
   viewLevel.value = 'city'
   currentCity.value = city
+  loading.value = true
+  loadError.value = ''
 
   try {
     const ok = await ensureMap()
-    if (!ok) {
-      loading.value = false
-      return
-    }
-    map.setZooms([8, 17])
+    if (!ok) { loading.value = false; return }
 
     const list = await fetchMapSchools({ city })
-    const newOverlays: any[] = []
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const newMarkers: any[] = []
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const fitTargets: any[] = []
+
+    // City boundary highlight — drawn first so it's below markers
+    if (cityFeature) {
+      for (const path of geoPaths(cityFeature.geometry)) {
+        const boundary = new AMap.Polygon({
+          path,
+          fillColor: '#dbeafe',
+          fillOpacity: 0.4,
+          strokeColor: '#2563eb',
+          strokeWeight: 2.5,
+          cursor: 'default',
+          zIndex: 25,
+          bubble: true, // let clicks pass through to underlying province polygons
+        })
+        newMarkers.push(boundary)
+        fitTargets.push(boundary)
+      }
+    }
 
     for (const item of list) {
       const marker = new AMap.Marker({
@@ -297,31 +391,39 @@ async function loadCityView(city: string) {
         title: item.name,
         content: `<div style="width:12px;height:12px;border-radius:50%;border:2px solid #fff;box-shadow:0 0 0 1px rgba(0,0,0,0.15);background:${badgeColor(item)}"></div>`,
         offset: new AMap.Pixel(-7, -7),
+        zIndex: 30,
       })
       marker.on('click', () => {
         const school = props.schools.find((s) => s.id === item.id)
         if (school) emit('selectSchool', school)
       })
-      newOverlays.push(marker)
+      newMarkers.push(marker)
+      fitTargets.push(marker)
     }
 
-    overlays = newOverlays
+    cityMarkers = newMarkers
     loading.value = false
-    map.add(overlays)
-    if (overlays.length) map.setFitView(overlays, false, [40, 40, 40, 40])
+    map.add(cityMarkers)
+
+    // Center on city — fit to boundary + markers, then zoom out slightly for context
+    if (fitTargets.length) {
+      map.setFitView(fitTargets, true, [80, 80, 80, 80])
+    }
   } catch (err) {
     loading.value = false
     loadError.value = err instanceof Error ? err.message : '学校数据加载失败'
   }
 }
 
+// ─── Navigation ───────────────────────────────────────────────────────────────
 function selectProvince(provinceFull: string) {
   emit('selectProvince', normalizeProvinceName(provinceFull))
   loadProvinceView(provinceFull)
 }
 
-function selectCity(city: string) {
-  loadCityView(city)
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function selectCity(city: string, feature?: any) {
+  loadCityView(city, feature)
 }
 
 function backToCountry() {
@@ -330,9 +432,20 @@ function backToCountry() {
 }
 
 function backToProvince() {
-  if (currentProvinceFull.value) loadProvinceView(currentProvinceFull.value)
+  if (!currentProvinceFull.value) return
+  hideTooltip()
+  if (map && cityMarkers.length) { map.remove(cityMarkers); cityMarkers = [] }
+  viewLevel.value = 'province'
+  currentCity.value = ''
+  // Re-fit to existing province polygons (already on map)
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const polygonsOnly = provincePolygons.filter((o: any) => !(o instanceof AMap.Text))
+  if (map && polygonsOnly.length) {
+    map.setFitView(polygonsOnly, true, [100, 100, 100, 100])
+  }
 }
 
+// ─── Sync with filter panel province selection ────────────────────────────────
 watch(
   () => props.selectedProvince,
   (val) => {
@@ -347,6 +460,7 @@ watch(
   },
 )
 
+// ─── Lifecycle ────────────────────────────────────────────────────────────────
 onMounted(() => {
   if (!mapContainer.value) return
   resizeObserver = new ResizeObserver((entries) => {
@@ -365,13 +479,18 @@ onMounted(() => {
 onUnmounted(() => {
   resizeObserver?.disconnect()
   resizeObserver = null
-  clearOverlays()
+  infoWindow?.close()
   if (map) {
+    map.remove([...countryPolygons, ...provincePolygons, ...cityMarkers])
     map.destroy()
     map = null
   }
+  countryPolygons = []
+  provincePolygons = []
+  cityMarkers = []
 })
 
+// ─── Breadcrumb ───────────────────────────────────────────────────────────────
 const breadcrumb = computed(() => {
   const parts: { label: string; action: () => void }[] = [{ label: '全国', action: backToCountry }]
   if (currentProvinceFull.value) {
