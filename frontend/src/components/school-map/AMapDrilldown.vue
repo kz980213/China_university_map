@@ -79,6 +79,7 @@ const currentProvinceFull = ref('')
 const currentCity = ref('')
 const loading = ref(false)
 const loadError = ref('')
+const loadingSchoolDetail = ref(false)
 
 // ─── AMap instances ───────────────────────────────────────────────────────────
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -107,7 +108,10 @@ const cityLabelMap = new Map<string, any>()
 // City polygon tracker: city name → polygon list (to dim on click)
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const cityPolygonMap = new Map<string, any[]>()
-// Polygons belonging to the currently-selected city (restored on back)
+// Province polygon tracker: province full name → countryPolygon list
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const provincePolygonMap = new Map<string, any[]>()
+// Polygons set to opacity-0 for the current city view (city + province country polygon)
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 let selectedCityPolygons: any[] = []
 
@@ -166,6 +170,7 @@ function buildProvinceTooltip(stat?: ProvinceStatItem): string {
 
 function buildCityTooltip(stat: CityStatItem): string {
   return `<div style="${TOOLTIP_STYLE}">
+    <div style="font-weight:700;font-size:14px;color:#111827;margin-bottom:6px">${stat.city}</div>
     <table style="border-collapse:collapse">
       <tr><td ${TD_LABEL}>院校总数</td><td ${TD_VAL} style="color:#1f2937">${stat.count ?? 0}</td></tr>
       <tr><td ${TD_LABEL}>985</td><td ${TD_VAL} style="color:#dc2626">${stat.count985 ?? 0}</td></tr>
@@ -195,6 +200,21 @@ function hideTooltip() {
     infoWindow?.close()
     _tooltipHideTimer = null
   }, 150)
+}
+
+// ─── School detail fetch (shared by dot click + label click) ─────────────────
+async function handleSchoolClick(id: number) {
+  if (loadingSchoolDetail.value) return
+  loadingSchoolDetail.value = true
+  try {
+    const school = (await fetchSchoolDetail(id)) as School
+    emit('selectSchool', school)
+  } catch {
+    const fallback = props.schools.find((s) => s.id === id)
+    if (fallback) emit('selectSchool', fallback)
+  } finally {
+    loadingSchoolDetail.value = false
+  }
 }
 
 // ─── Selected-city overlay helpers ───────────────────────────────────────────
@@ -258,6 +278,9 @@ async function _buildAndAddCountryPolygons(): Promise<void> {
 
     if (center) provinceCenterCache.set(name, center as [number, number])
 
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const thisProvincePolys: any[] = []
+    const stat = statsByShort.get(shortName)
     for (const path of geoPaths(feature.geometry)) {
       const polygon = new AMap.Polygon({
         path,
@@ -269,13 +292,14 @@ async function _buildAndAddCountryPolygons(): Promise<void> {
         zIndex: 10,
       })
       polygon.on('click', () => selectProvince(name))
-      const stat = statsByShort.get(shortName)
       polygon.on('mouseover', () => {
         if (center) showTooltipAt(buildProvinceTooltip(stat), center as [number, number])
       })
       polygon.on('mouseout', hideTooltip)
       countryPolygons.push(polygon)
+      thisProvincePolys.push(polygon)
     }
+    provincePolygonMap.set(name, thisProvincePolys)
   }
 
   map.add(countryPolygons)
@@ -456,19 +480,11 @@ async function loadCityView(city: string, cityFeature?: any) {
         offset: new AMap.Pixel(-7, -7),
         zIndex: 30,
       })
-      marker.on('click', async () => {
-        try {
-          const school = (await fetchSchoolDetail(item.id)) as School
-          emit('selectSchool', school)
-        } catch {
-          const fallback = props.schools.find((s) => s.id === item.id)
-          if (fallback) emit('selectSchool', fallback)
-        }
-      })
+      marker.on('click', () => handleSchoolClick(item.id))
       newMarkers.push(marker)
       fitTargets.push(marker)
 
-      // School name label above the dot
+      // School name label above the dot — also clickable
       const nameLabel = new AMap.Text({
         text: item.name,
         position: [item.lng, item.lat],
@@ -483,11 +499,12 @@ async function loadCityView(city: string, cityFeature?: any) {
           'box-shadow': 'none',
           'border-radius': '2px',
           'white-space': 'nowrap',
-          'pointer-events': 'none',
+          cursor: 'pointer',
         },
         anchor: 'bottom-center',
         zIndex: 35,
       })
+      nameLabel.on('click', () => handleSchoolClick(item.id))
       newMarkers.push(nameLabel)
     }
 
@@ -520,12 +537,17 @@ function selectCity(city: string, feature?: any) {
     if (idx !== -1) provincePolygons.splice(idx, 1)
     cityLabelMap.delete(city)
   }
-  // Make only the clicked city's polygon transparent; all others keep their fill
+  // Make clicked city transparent so base map shows through.
+  // Must also hide the province's countryPolygon (zIndex 10) which sits beneath
+  // the city polygon and would otherwise still cover the base tiles.
   restoreSelectedCityPolygons()
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const polys = cityPolygonMap.get(city) ?? []
-  for (const p of polys) (p as any).setOptions?.({ fillOpacity: 0 })
-  selectedCityPolygons = [...polys]
+  const cityPolys = cityPolygonMap.get(city) ?? []
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const provPolys = provincePolygonMap.get(currentProvinceFull.value) ?? []
+  const allToHide = [...cityPolys, ...provPolys]
+  for (const p of allToHide) (p as any).setOptions?.({ fillOpacity: 0 })
+  selectedCityPolygons = allToHide
 
   loadCityView(city, feature)
 }
@@ -633,6 +655,7 @@ const breadcrumb = computed(() => {
 
     <div v-if="loading" class="map-overlay-tip">加载中…</div>
     <div v-else-if="loadError" class="map-overlay-tip error">{{ loadError }}</div>
+    <div v-if="loadingSchoolDetail" class="map-overlay-tip school-loading">查询学校信息…</div>
   </div>
 </template>
 
@@ -729,6 +752,13 @@ const breadcrumb = computed(() => {
 
   &.error {
     color: $color-danger;
+  }
+
+  &.school-loading {
+    top: auto;
+    bottom: 24px;
+    transform: translateX(-50%);
+    color: $color-primary;
   }
 }
 </style>
