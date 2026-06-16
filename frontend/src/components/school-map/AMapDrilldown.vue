@@ -31,7 +31,7 @@ type ViewLevel = 'country' | 'province' | 'city'
 
 const KEY = import.meta.env.VITE_AMAP_KEY as string | undefined
 const COLOR_STOPS = ['#eff6ff', '#bfdbfe', '#3b82f6', '#1e40af']
-const DATAV_BASE = 'https://geo.datav.aliyun.com/areas_v3/bound'
+const GEO_BASE = '/api/map/geo'
 
 const PROVINCE_ADCODE: Record<string, number> = {
   '北京市': 110000, '天津市': 120000, '河北省': 130000, '山西省': 140000,
@@ -50,7 +50,7 @@ const geoCache = new Map<number, any>()
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 async function fetchGeo(adcode: number): Promise<any> {
   if (geoCache.has(adcode)) return geoCache.get(adcode)
-  const res = await fetch(`${DATAV_BASE}/${adcode}_full.json`, { referrerPolicy: 'no-referrer' })
+  const res = await fetch(`${GEO_BASE}/${adcode}`)
   if (!res.ok) throw new Error(`边界数据加载失败 (${adcode})`)
   const data = await res.json()
   geoCache.set(adcode, data)
