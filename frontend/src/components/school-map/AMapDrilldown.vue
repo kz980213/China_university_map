@@ -3,7 +3,7 @@ import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import AMapLoader from '@amap/amap-jsapi-loader'
 import type { School } from '@/types/school'
 import { normalizeProvinceName, toMapProvinceName } from '@/utils/province'
-import { fetchProvinceCities, fetchMapSchools } from '@/api'
+import { fetchProvinceCities, fetchMapSchools, fetchSchoolDetail } from '@/api'
 export interface ProvinceStatItem {
   province: string
   total: number
@@ -104,6 +104,12 @@ const provinceCenterCache = new Map<string, [number, number]>()
 // City count-label tracker: city name → AMap.Text object (so we can remove on click)
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const cityLabelMap = new Map<string, any>()
+// City polygon tracker: city name → polygon list (to dim on click)
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const cityPolygonMap = new Map<string, any[]>()
+// Polygons belonging to the currently-selected city (restored on back)
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let selectedCityPolygons: any[] = []
 
 // Guard against concurrent country polygon builds
 let _countryBuildPromise: Promise<void> | null = null
@@ -145,9 +151,8 @@ const TOOLTIP_STYLE = [
 const TD_LABEL = 'style="color:#6b7280;padding:1px 12px 1px 0"'
 const TD_VAL   = 'style="font-weight:600;text-align:right"'
 
-function buildProvinceTooltip(name: string, stat?: ProvinceStatItem): string {
+function buildProvinceTooltip(stat?: ProvinceStatItem): string {
   return `<div style="${TOOLTIP_STYLE}">
-    <div style="font-weight:700;font-size:14px;color:#111827;margin-bottom:6px">${name}</div>
     <table style="border-collapse:collapse">
       <tr><td ${TD_LABEL}>院校总数</td><td ${TD_VAL} style="color:#1f2937">${stat?.total ?? 0}</td></tr>
       <tr><td ${TD_LABEL}>985</td><td ${TD_VAL} style="color:#dc2626">${stat?.count985 ?? 0}</td></tr>
@@ -161,20 +166,23 @@ function buildProvinceTooltip(name: string, stat?: ProvinceStatItem): string {
 
 function buildCityTooltip(stat: CityStatItem): string {
   return `<div style="${TOOLTIP_STYLE}">
-    <div style="font-weight:700;font-size:14px;color:#111827;margin-bottom:6px">${stat.city}</div>
     <table style="border-collapse:collapse">
-      <tr><td ${TD_LABEL}>院校总数</td><td ${TD_VAL} style="color:#1f2937">${stat.count}</td></tr>
-      <tr><td ${TD_LABEL}>985</td><td ${TD_VAL} style="color:#dc2626">${stat.count985}</td></tr>
-      <tr><td ${TD_LABEL}>211</td><td ${TD_VAL} style="color:#2563eb">${stat.count211}</td></tr>
-      <tr><td ${TD_LABEL}>双一流</td><td ${TD_VAL} style="color:#7c3aed">${stat.doubleFirstClass}</td></tr>
-      <tr><td ${TD_LABEL}>本科</td><td ${TD_VAL} style="color:#059669">${stat.undergraduate}</td></tr>
-      <tr><td ${TD_LABEL}>专科</td><td ${TD_VAL} style="color:#d97706">${stat.juniorCollege}</td></tr>
+      <tr><td ${TD_LABEL}>院校总数</td><td ${TD_VAL} style="color:#1f2937">${stat.count ?? 0}</td></tr>
+      <tr><td ${TD_LABEL}>985</td><td ${TD_VAL} style="color:#dc2626">${stat.count985 ?? 0}</td></tr>
+      <tr><td ${TD_LABEL}>211</td><td ${TD_VAL} style="color:#2563eb">${stat.count211 ?? 0}</td></tr>
+      <tr><td ${TD_LABEL}>双一流</td><td ${TD_VAL} style="color:#7c3aed">${stat.doubleFirstClass ?? 0}</td></tr>
+      <tr><td ${TD_LABEL}>本科</td><td ${TD_VAL} style="color:#059669">${stat.undergraduate ?? 0}</td></tr>
+      <tr><td ${TD_LABEL}>专科</td><td ${TD_VAL} style="color:#d97706">${stat.juniorCollege ?? 0}</td></tr>
     </table>
   </div>`
 }
 
-// Tooltip anchored to a fixed geographic center — does NOT follow the mouse
+// Tooltip anchored to geographic center. Debounced hide prevents flicker when
+// the mouse briefly enters the InfoWindow overlay (which sits above the polygon).
+let _tooltipHideTimer: ReturnType<typeof setTimeout> | null = null
+
 function showTooltipAt(html: string, center: [number, number]) {
+  if (_tooltipHideTimer) { clearTimeout(_tooltipHideTimer); _tooltipHideTimer = null }
   if (!infoWindow) {
     infoWindow = new AMap.InfoWindow({ isCustom: true, autoMove: false, closeWhenClickMap: false })
   }
@@ -182,21 +190,18 @@ function showTooltipAt(html: string, center: [number, number]) {
   infoWindow.open(map, center)
 }
 
-function hideTooltip() { infoWindow?.close() }
-
-// ─── Overlay opacity helpers (city view dims the background) ─────────────────
-function dimForCityView() {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  for (const p of countryPolygons)  (p as any).setOptions?.({ fillOpacity: 0.05 })
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  for (const p of provincePolygons) (p as any).setOptions?.({ fillOpacity: 0.05 })
+function hideTooltip() {
+  _tooltipHideTimer = setTimeout(() => {
+    infoWindow?.close()
+    _tooltipHideTimer = null
+  }, 150)
 }
 
-function restorePolygonOpacity() {
+// ─── Selected-city overlay helpers ───────────────────────────────────────────
+function restoreSelectedCityPolygons() {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  for (const p of countryPolygons)  (p as any).setOptions?.({ fillOpacity: 0.85 })
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  for (const p of provincePolygons) (p as any).setOptions?.({ fillOpacity: 0.85 })
+  for (const p of selectedCityPolygons) (p as any).setOptions?.({ fillOpacity: 0.85 })
+  selectedCityPolygons = []
 }
 
 // ─── Map init ─────────────────────────────────────────────────────────────────
@@ -266,7 +271,7 @@ async function _buildAndAddCountryPolygons(): Promise<void> {
       polygon.on('click', () => selectProvince(name))
       const stat = statsByShort.get(shortName)
       polygon.on('mouseover', () => {
-        if (center) showTooltipAt(buildProvinceTooltip(shortName, stat), center as [number, number])
+        if (center) showTooltipAt(buildProvinceTooltip(stat), center as [number, number])
       })
       polygon.on('mouseout', hideTooltip)
       countryPolygons.push(polygon)
@@ -285,7 +290,7 @@ async function ensureCountryBase(): Promise<void> {
 
 // ─── View loaders ─────────────────────────────────────────────────────────────
 async function loadCountryView() {
-  restorePolygonOpacity()
+  restoreSelectedCityPolygons()
   hideTooltip()
   if (map && provincePolygons.length) { map.remove(provincePolygons); provincePolygons = [] }
   if (map && cityMarkers.length) { map.remove(cityMarkers); cityMarkers = [] }
@@ -319,6 +324,8 @@ async function loadProvinceView(provinceFull: string) {
   if (map && provincePolygons.length) { map.remove(provincePolygons); provincePolygons = [] }
   if (map && cityMarkers.length) { map.remove(cityMarkers); cityMarkers = [] }
   cityLabelMap.clear()
+  cityPolygonMap.clear()
+  selectedCityPolygons = []
   viewLevel.value = 'province'
   currentProvinceFull.value = provinceFull
   currentCity.value = ''
@@ -359,6 +366,7 @@ async function loadProvinceView(provinceFull: string) {
       const stat = statByCity.get(name) ?? { city: name, count: 0, count985: 0, count211: 0, doubleFirstClass: 0, undergraduate: 0, juniorCollege: 0 }
       const fill = colorForValue(stat.count, min, max)
 
+      const cityPolys: unknown[] = []
       for (const path of geoPaths(feature.geometry)) {
         const polygon = new AMap.Polygon({
           path,
@@ -376,7 +384,10 @@ async function loadProvinceView(provinceFull: string) {
         polygon.on('mouseout', hideTooltip)
         newPolygons.push(polygon)
         fitTargets.push(polygon)
+        cityPolys.push(polygon)
       }
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      cityPolygonMap.set(name, cityPolys as any[])
 
       if (center && stat.count > 0) {
         const label = makeDistrictLabel(String(stat.count), center)
@@ -412,9 +423,6 @@ async function loadCityView(city: string, cityFeature?: any) {
     const ok = await ensureMap()
     if (!ok) { loading.value = false; return }
 
-    // Dim province/city polygon fills so base map tiles show through
-    dimForCityView()
-
     const list = await fetchMapSchools({ city })
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const newMarkers: any[] = []
@@ -448,9 +456,14 @@ async function loadCityView(city: string, cityFeature?: any) {
         offset: new AMap.Pixel(-7, -7),
         zIndex: 30,
       })
-      marker.on('click', () => {
-        const school = props.schools.find((s) => s.id === item.id)
-        if (school) emit('selectSchool', school)
+      marker.on('click', async () => {
+        try {
+          const school = (await fetchSchoolDetail(item.id)) as School
+          emit('selectSchool', school)
+        } catch {
+          const fallback = props.schools.find((s) => s.id === item.id)
+          if (fallback) emit('selectSchool', fallback)
+        }
       })
       newMarkers.push(marker)
       fitTargets.push(marker)
@@ -507,6 +520,13 @@ function selectCity(city: string, feature?: any) {
     if (idx !== -1) provincePolygons.splice(idx, 1)
     cityLabelMap.delete(city)
   }
+  // Make only the clicked city's polygon transparent; all others keep their fill
+  restoreSelectedCityPolygons()
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const polys = cityPolygonMap.get(city) ?? []
+  for (const p of polys) (p as any).setOptions?.({ fillOpacity: 0 })
+  selectedCityPolygons = [...polys]
+
   loadCityView(city, feature)
 }
 
@@ -516,7 +536,7 @@ function backToCountry() {
 }
 
 function backToProvince() {
-  restorePolygonOpacity()
+  restoreSelectedCityPolygons()
   if (!currentProvinceFull.value) return
   hideTooltip()
   if (map && cityMarkers.length) { map.remove(cityMarkers); cityMarkers = [] }
