@@ -5,7 +5,7 @@ import type { ChatMessage } from '@/types/ai'
 import { useSchoolFilter } from '@/composables/useSchoolFilter'
 import AppHeader from '@/components/layout/AppHeader.vue'
 import FilterPanel from '@/components/school-map/FilterPanel.vue'
-import ChinaSchoolMap from '@/components/school-map/ChinaSchoolMap.vue'
+import AMapDrilldown from '@/components/school-map/AMapDrilldown.vue'
 import ResultPanel from '@/components/school-map/ResultPanel.vue'
 import SchoolDetailDrawer from '@/components/school-map/SchoolDetailDrawer.vue'
 import AiAssistantButton from '@/components/ai-assistant/AiAssistantButton.vue'
@@ -81,12 +81,12 @@ function handleAiApplyFilter(suggestedFilter: ChatMessage['suggestedFilter']) {
 
       <div v-if="schoolsError" class="global-error">载入失败: {{ schoolsError }}</div>
       <template v-else>
-      <ChinaSchoolMap
+      <AMapDrilldown
         :schools="allSchools"
-        :filtered-schools="filteredSchools"
         :selected-province="filter.province"
         :province-stats="provinceStats"
         @select-province="handleProvinceSelect"
+        @select-school="showSchoolDetail"
       />
       <ResultPanel
         :schools="filteredSchools"

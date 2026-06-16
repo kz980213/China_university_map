@@ -174,3 +174,23 @@ export async function fetchMajors(params: Record<string, unknown> = {}) {
 export async function fetchSchoolMajors(schoolId: number) {
   return request<any[]>(`/majors/school/${schoolId}`)
 }
+
+// ── 地图下钻 ──
+export async function fetchProvinceCities(province: string) {
+  return request<{ city: string; count: number }[]>("/map/cities", { province })
+}
+
+export async function fetchMapSchools(params: { province?: string; city?: string }) {
+  return request<
+    {
+      id: number
+      name: string
+      lng: number
+      lat: number
+      is985: boolean
+      is211: boolean
+      isDoubleFirstClass: boolean
+      level: string
+    }[]
+  >("/map/schools", params)
+}

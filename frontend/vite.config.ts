@@ -12,6 +12,7 @@ export default defineConfig({
   server: {
     port: 5175,
     host: true,
+    allowedHosts: ['local.chinauniversitymap.com'],
     proxy: {
       '/api': {
         target: 'http://127.0.0.1:8010',
