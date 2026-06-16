@@ -15,18 +15,19 @@
     "type-check": "vue-tsc --noEmit"
   },
   "dependencies": {
-    "vue": "3.5.35",
-    "vue-router": "5.1.0",
-    "pinia": "3.0.4",
+    "@amap/amap-jsapi-loader": "1.0.1",
+    "echarts": "6.1.0",
     "element-plus": "2.14.1",
-    "echarts": "6.1.0"
+    "pinia": "3.0.4",
+    "vue": "3.5.35",
+    "vue-router": "5.1.0"
   },
   "devDependencies": {
+    "@types/node": "22.19.7",
     "@vitejs/plugin-vue": "6.0.7",
+    "sass": "1.100.0",
     "typescript": "5.9.3",
     "vite": "8.0.16",
-    "vue-tsc": "3.2.0",
-    "sass": "1.100.0",
-    "@types/node": "22.19.7"
+    "vue-tsc": "3.2.0"
   }
 }
