@@ -50,7 +50,7 @@ const geoCache = new Map<number, any>()
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 async function fetchGeo(adcode: number): Promise<any> {
   if (geoCache.has(adcode)) return geoCache.get(adcode)
-  const res = await fetch(`${DATAV_BASE}/${adcode}_full.json`)
+  const res = await fetch(`${DATAV_BASE}/${adcode}_full.json`, { referrerPolicy: 'no-referrer' })
   if (!res.ok) throw new Error(`边界数据加载失败 (${adcode})`)
   const data = await res.json()
   geoCache.set(adcode, data)
